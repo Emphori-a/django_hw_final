@@ -1,7 +1,9 @@
 from django.db import models
+from django.db.models import Count
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django.utils import timezone
+
 
 MAX_FIELD_LENGTH = 256
 STR_REPR_LENGTH = 15
@@ -9,15 +11,26 @@ STR_REPR_LENGTH = 15
 User = get_user_model()
 
 
-class TodayManager(models.Manager):
-
+class PostsForPageManager(models.Manager):
     def get_queryset(self):
+        return super().get_queryset().select_related(
+            'category',
+            'author',
+            'location'
+        )
+
+    def get_posts_queryset(self, is_today_posts=False, is_annotate=False):
         today = timezone.now()
-        return super().get_queryset().filter(
-            pub_date__lte=today,
-            is_published=True,
-            category__is_published=True,
-        ).select_related('category', 'author', 'location')
+        queryset = self.get_queryset()
+        if is_today_posts:
+            queryset = queryset.filter(pub_date__lte=today,
+                                       is_published=True,
+                                       category__is_published=True,)
+        if is_annotate:
+            queryset = queryset.annotate(
+                comment_count=Count('comments')
+            ).order_by('-pub_date')
+        return queryset
 
 
 class PublishedModel(models.Model):
@@ -107,7 +120,7 @@ class Post(PublishedModel):
     )
 
     objects = models.Manager()
-    today_post = TodayManager()
+    for_page = PostsForPageManager()
 
     class Meta:
         verbose_name = 'публикация'
@@ -118,7 +131,7 @@ class Post(PublishedModel):
         return self.title[:STR_REPR_LENGTH]
 
     def get_absolute_url(self):
-        return reverse('blog:post_detail', kwargs={'pk': self.pk})
+        return reverse('blog:post_detail', kwargs={'post_id': self.pk})
 
 
 class Comment(models.Model):
@@ -129,7 +142,10 @@ class Comment(models.Model):
         related_name='comments'
     )
     created_at = models.DateTimeField(auto_now_add=True)
-    author = models.ForeignKey(User, on_delete=models.CASCADE)
+    author = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='comments')
 
     class Meta:
         verbose_name = 'комментарий'
