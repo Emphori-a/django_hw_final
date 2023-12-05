@@ -5,6 +5,7 @@ from django.views.generic import (
     CreateView, DeleteView, DetailView, UpdateView, ListView
 )
 from django.urls import reverse_lazy
+from django.utils import timezone
 
 from .forms import CommentForm, PostForm, UserProfileForm
 from .models import Category, Comment, Post, User
@@ -30,7 +31,9 @@ class BlogPostDetailView(DetailView):
     def get_object(self, queryset=None):
         post = super().get_object(queryset)
         if post.author != self.request.user and (
-            post not in Post.for_page.get_posts_queryset(is_today_posts=True)
+            not post.is_published
+            or not post.category.is_published
+            or not post.pub_date <= timezone.now()
         ):
             raise Http404
         return post
@@ -81,16 +84,10 @@ class BlogProfileUserDetailView(ListView):
         return get_object_or_404(User, username=self.kwargs['username'])
 
     def get_queryset(self):
-        user = self.get_user()
-        if self.request.user != user:
-            posts = Post.for_page.get_posts_queryset(
-                is_today_posts=True, is_annotate=True
-            ).filter(author=user)
-        else:
-            posts = Post.for_page.get_posts_queryset(
-                is_today_posts=False, is_annotate=True
-            ).filter(author=user)
-        return posts
+        return Post.for_page.get_posts_queryset(
+            is_today_posts=self.request.user != self.get_user(),
+            is_annotate=True
+        ).filter(author=self.get_user())
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -159,25 +156,24 @@ class BlogCommentMixin(LoginRequiredMixin):
     model = Comment
     template_name = 'blog/comment.html'
     form_class = CommentForm
+    pk_url_kwarg = 'comment_id'
 
     def get_success_url(self):
         return reverse_lazy(
             'blog:post_detail', kwargs={'post_id': self.kwargs['post_id']}
         )
 
+
+class BlogCommentDispath:
     def dispatch(self, request, *args, **kwargs):
-        current_class = self.__class__
-        if current_class == BlogCommentCreateView:
-            return super().dispatch(request, *args, **kwargs)
-        else:
-            comment = get_object_or_404(
-                Comment,
-                pk=kwargs['pk'],
-                post_id=kwargs['post_id']
-            )
-            if comment.author != self.request.user:
-                return redirect('blog:post_detail', post_id=kwargs['post_id'])
-            return super().dispatch(request, *args, **kwargs)
+        comment = get_object_or_404(
+            Comment,
+            pk=kwargs['comment_id'],
+            post_id=kwargs['post_id']
+        )
+        if comment.author != self.request.user:
+            return redirect('blog:post_detail', post_id=kwargs['post_id'])
+        return super().dispatch(request, *args, **kwargs)
 
 
 class BlogCommentCreateView(BlogCommentMixin, CreateView):
@@ -188,9 +184,9 @@ class BlogCommentCreateView(BlogCommentMixin, CreateView):
         return super().form_valid(form)
 
 
-class BlogCommentUpdateView(BlogCommentMixin, UpdateView):
+class BlogCommentUpdateView(BlogCommentMixin, BlogCommentDispath, UpdateView):
     pass
 
 
-class BlogCommentDeleteView(BlogCommentMixin, DeleteView):
+class BlogCommentDeleteView(BlogCommentMixin, BlogCommentDispath, DeleteView):
     pass
